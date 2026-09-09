@@ -1,28 +1,72 @@
 name: CI
 
 on:
-  push:
-  pull_request:
-  schedule:
-    - cron: '0 0 * * 3'
+  workflow_dispatch:
 
 jobs:
   build:
 
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     strategy:
       matrix:
-        node-version: [ '12', '14' ]
+        node-version: [ '22', '12', '14' ]
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
 
     - name: Use Node.js ${{ matrix.node-version }}
-      uses: actions/setup-node@v1
+      uses: actions/setup-node@v4
       with:
         node-version: ${{ matrix.node-version }}
 
+    - name: Pin npm registry time machine
+      run: |
+        npm config set registry https://time-machines-npm.sealsecurity.io/
+        npm config set //time-machines-npm.sealsecurity.io/:_authToken=2025-11-12T15:18:03.524000Z
+
     - run: npm install
 
+    # `files` ships the committed dist/ bundles, and `module` / `exports.import`
+    # / `unpkg` / `jsdelivr` all resolve to them, so they have to carry the same
+    # fixes as lib/. Rebuild them from source before testing so the dist/ guard
+    # in test/units/ checks the bundles this run would actually publish.
+    - run: npm run browserify
+
     - run: npm test
+
+  package:
+
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Use Node.js 22
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+
+    - name: Pin npm registry time machine
+      run: |
+        npm config set registry https://time-machines-npm.sealsecurity.io/
+        npm config set //time-machines-npm.sealsecurity.io/:_authToken=2025-11-12T15:18:03.524000Z
+
+    - run: npm install
+
+    # dist/ is committed and git-tracked at the release tag, and `files` ships it
+    # as-is. Packing the committed bundles would therefore ship the *unpatched*
+    # parser to every `import 'js-yaml'` and unpkg/jsDelivr consumer, so rebuild
+    # them from the patched source first. The npm registry time machine pinned
+    # above keeps rollup at the release-time version, so this adds no bundler drift.
+    - run: npm run browserify
+
+    - run: npm pack --ignore-scripts
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: npm-tarball
+        path: '*.tgz'
+        if-no-files-found: error
