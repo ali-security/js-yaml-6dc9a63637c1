@@ -54,6 +54,28 @@ function createRepeatedMergeAliasPattern(repetitions, keys) {
 }
 
 
+// Follow-up to the merge-key cap: a merge sequence made of *empty* mappings
+// folds no keys at all, so every source used to be processed for free. One
+// anchor holding `sources` empty mappings, re-merged `merges` times, keeps the
+// document at O(sources + merges) while the parser does O(sources * merges)
+// work and the merge-key counter never moves.
+function createEmptyMergeSourcePattern(sources, merges) {
+  var mappings = [];
+  var lines    = [];
+  var i;
+
+  for (i = 0; i < sources; i++) {
+    mappings.push('{}');
+  }
+
+  for (i = 0; i < merges; i++) {
+    lines.push('  - <<: *arr');
+  }
+
+  return 'arr: &arr [' + mappings.join(', ') + ']\ntargets:\n' + lines.join('\n') + '\n';
+}
+
+
 describe('Pathological tests', function () {
   // Generating the documents below is the only slow part; without the merge-key
   // cap these loads would run for minutes instead of failing fast.
@@ -97,6 +119,15 @@ describe('Pathological tests', function () {
     it('rejects the repeated merge-alias pattern from the advisory', function () {
       assertYamlException(function () {
         yaml.load(createRepeatedMergeAliasPattern(3000, 3000));
+      }, /merge keys exceeded maxTotalMergeKeys/);
+    });
+
+    // Empty merge sources fold no keys, so before the fix they cost nothing
+    // against the cap and this document ran for minutes. Each source mapping is
+    // now charged one unit, so the sequence is bounded like any other.
+    it('counts empty merge sources against maxTotalMergeKeys', function () {
+      assertYamlException(function () {
+        yaml.load(createEmptyMergeSourcePattern(20000, 20000));
       }, /merge keys exceeded maxTotalMergeKeys/);
     });
 
